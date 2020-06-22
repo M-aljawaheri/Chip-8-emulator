@@ -416,7 +416,7 @@ int main(int argc, char** argv) {
     // Initialize the CPU
     keyDictionary keybinds = KeybindsInitialize();
     Chip_8* CPU = new Chip_8(60, window);
-    CPU->LoadProgram("..\\Programs\\MISSILE");
+    CPU->LoadProgram("..\\Programs\\INVADERS");
 
 
     SDL_Event e;
