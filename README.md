@@ -11,5 +11,5 @@ Simply go to the LoadProgram function call and change the file path to whatever 
 # References
 For anyone interested in replicating this emulator I'd heavily suggest the following references That were of much help to me:
 
-https://en.wikipedia.org/wiki/CHIP-8
+https://en.wikipedia.org/wiki/CHIP-8  
 http://devernay.free.fr/hacks/chip8/C8TECH10.HTM
