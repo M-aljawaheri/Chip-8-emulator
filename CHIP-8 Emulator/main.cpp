@@ -15,30 +15,34 @@
 #include <assert.h>
 #include <iostream>
 #include <fstream>
-#include "Instructions.h"
 #include <SDL.h>
 #include <string>
 #include <unordered_map>
+#include <random>
 
- /** Memory starts at 0x200 (address 512) since 0 through 511 are reserved for CHIP-8 Interpreter */
+/** Memory starts at 0x200 (address 512) since 0 through 511 are reserved for CHIP-8 Interpreter */
 #define MEMSTART 0
-#define NEXT_INSTRUCTION { PC += 2; break; }  // Increments program counter and breaks switch
-static constexpr const unsigned SCALEFACTOR = 10;
-static constexpr const unsigned W = 64, H = 32;
+#define FONT_ADDRESS 2
+static constexpr const uint8_t SCALEFACTOR = 10u;
+static constexpr const uint8_t W = 64u, H = 32u;
 
+/** Types */
 typedef uint16_t uregister16;
 typedef uint8_t uregister8;
 typedef uint16_t instruction;
 typedef int8_t byte;
 typedef uint8_t ubyte;
 typedef unsigned int uint;
+
+/** All instructions are 2 bytes long and are stored most-significant-byte first (big endian) */
+enum instructions {
+    CLS = (uint16_t)0xE0,  // Clear display
+    RET = (uint16_t)0xEE,  // Return from subroutine
+};
 enum keyState {UP, DOWN};
 
 /** Globals */
 SDL_Renderer* gRenderer = nullptr;
-
-/** Helper functions */
-static inline ubyte GetfirstBit(ubyte bits) { return (bits >> 7) & 0x1; }
 
 struct Chip_8 {
 
@@ -52,15 +56,16 @@ struct Chip_8 {
     uint16_t PC = { 0 };           //  16 bit Program counter
     uint8_t SP  = { 0 };           // 8 bit stack pointer (value is index of topmost level of stack)
     std::vector<int16_t> callstack;   // stack is array of 16 16-bits
+    std::uniform_int_distribution<uint16_t> randomSeed;    // Generator and Seed for randomness
+    std::default_random_engine randGen;                    // Adapted from stack overflow
 
     // Graphics output
-    //void* pixelState[W * H] = { 0 };
     SDL_Window* mWindow = nullptr;
     SDL_Texture* texture = nullptr;
     std::vector<int8_t> pixels{ 0 };    // size [W*H], 0 is for white, 1 is for black
-    int texturePitch = 0;   // texture width in memory
 
     Chip_8(uint _FPS, SDL_Window* window) {
+        randomSeed = std::uniform_int_distribution<uint16_t>(0, 255U);   // Initialize the generator
         uint FPS = _FPS;                      // How many frames per second should programs run on
         mem.reserve(4096); mem.resize(4096);  // Our addresses -> 0x000-0xFFF
         keys.reserve(16); keys.resize(16);    // keyboard has 16 keys
@@ -84,95 +89,89 @@ struct Chip_8 {
             0xF0, 0x80, 0xF0, 0x80, 0xF0,  // E
             0xF0, 0x80, 0xF0, 0x80, 0x80,  // F
         };
-        for (int i = 2; i < 82; ++i) {
-            mem[i] = font[i-2];
+        for (int i = FONT_ADDRESS; i < 80 + FONT_ADDRESS; ++i) {
+            mem[i] = font[i-FONT_ADDRESS];
         }
         pixels.reserve(W * H); pixels.resize(W * H);
-        SDL_Texture* texture = SDL_CreateTexture(gRenderer, SDL_GetWindowPixelFormat(window), SDL_TextureAccess::SDL_TEXTUREACCESS_STREAMING, W * SCALEFACTOR, H * SCALEFACTOR);
-        if (!texture) {
-            printf("Unable to create blank texture! SDL Error: %s\n", SDL_GetError());
-            exit(1);
-        }
-        mWindow = window;
-        // texture modification test
-
+        //SDL_Texture* texture = SDL_CreateTexture(gRenderer, SDL_GetWindowPixelFormat(window), SDL_TextureAccess::SDL_TEXTUREACCESS_STREAMING, W * SCALEFACTOR, H * SCALEFACTOR);
+        //if (!texture) {
+        //    printf("Unable to create blank texture! SDL Error: %s\n", SDL_GetError());
+        //    exit(1);
+        //}
     }                                                 
 
 
     void ExecuteInst() {
+        if (PC >= mem.size()) {
+            std::cerr << "Incorrect PC, instruction overflow"; exit(1);
+        }
+
         instruction opcode = mem[PC];
         opcode <<= 8; opcode |= mem[PC + 1];
 
         // get the variables and start matching
-        uint16_t nnn = opcode & 0xFFF;
-        uint8_t n = opcode & 0xF;
-        uint8_t x = mem[PC] & 0xF;           // lower half of first byte   (nibble 2)
-        uint8_t y = mem[PC + 1] >> 4 & 0xF;  // upper half of second byte  (nibble 3)
+        uint16_t nnn = opcode & 0xFFFu;
+        uint8_t n = opcode & 0xFu;
+        uint8_t x = mem[PC] & 0xFu;           // lower half of first byte   (nibble 2)
+        uint8_t y = mem[PC + 1] >> 4 & 0xFu;  // upper half of second byte  (nibble 3)
         int8_t kk = mem[PC + 1];
-        ubyte u = (mem[PC] >> 4) & 0xF;      // first nibble
-        ubyte v = (mem[PC + 1] ) & 0xF;      // last nibble
+        ubyte u = (mem[PC] >> 4) & 0xFu;      // first nibble
+        ubyte v = (mem[PC + 1] ) & 0xFu;      // last nibble
+        PC += 2;    // We are done with this instruction -- Note: When checking for current instruction check at PC-2
 
         if (opcode == CLS) {  // clear display
-            //Clear screen TODO
-            for (int i = 0; i < W*H; ++i) {
-                pixels[i] = 0;
-            }
-            PC += 2;
+            // using memset is safe because uint8 is a C data structure
+            memset(&pixels[0], 0, sizeof(pixels[0]) * pixels.size());
             return;
         }
         else if (opcode == RET) {  // return from subroutine
-            PC = callstack[SP--];
+            PC = callstack[--SP];
             return;
         }
 
         switch (u) {
             case 1: {  // [0x1nnn]
-                if (nnn >= mem.size()) {  // All instructions start at even indices
-                    std::cerr << "Incorrect jump address\n"; exit(1);
+                if (nnn >= mem.size()) {  // All instructions start at even indices (odd if 0-indexing)
+                    std::cerr << "Incorrect jump address\n"; SDL_Quit(); exit(1);
                 }
                 PC = nnn;
                 break;
             }
 
             case 2: {  // [0x2nnn]
-                callstack[++SP] = PC;
+                if (SP >= callstack.size()) {
+                    std::cout << "Max recursion depth exceeded\n"; SDL_Quit(); exit(1);
+                }
+                callstack[SP++] = PC;
                 PC = nnn;
                 break;
             }
 
             case 3: { // [0x3xkk] Skip next instruction
                 if (V[x] == kk)
-                    PC += 4;
-                else
                     PC += 2;
                 break;
             }
 
             case 4: { // [4xkk] Skip next instruction if NE
                 if (V[x] != kk)
-                    PC += 4;
-                else
                     PC += 2;
                 break;
             }
 
             case 5: {  // [5xy0] Skip next instruction if E
                 if (V[x] == V[y])
-                    PC += 4;
-                else
                     PC += 2;
                 break;
             }
 
             case 6: {   // [6xkk] Load
                 V[x] = kk;
-                PC += 2;
                 break;
             }
 
             case 7: {  // [7xkk]
                 V[x] += kk;
-                PC += 2;
                 break;
             }
             
@@ -203,47 +202,42 @@ struct Chip_8 {
                     case 5: {  // [8xy5] - SUB
                         uint16_t result = V[x] - V[y];
                         V[x] > V[y] ? V[15] = 1 : V[15] = 0;
-                        V[x] = V[x] - V[y];
+                        V[x] -= V[y];
                         break;
                     }
                     case 6: {  // [8xy6] - SHR - Raises flag if num is odd
-                        if (V[x] % 2 == 1) V[15] = 1;
-                        else               V[15] = 0;
-                        V[x] >>= 1;   // Divide by 2
+                        //V[15] = V[y] & 0x1;     // least significant bit
+                        //V[x] = V[y] >> 1;           // Divide by 2
+                        V[15] = V[x] & 0x1U;
+                        V[x] >>= 1;
                         break;
                     }
                     case 7: {  // [8xy7] SUBN Vx, Vy
-                        
-                        if (V[y] > V[x]) { V[15] = 1; }
-                        else             { V[15] = 0; }
+                        V[15] = V[y] > V[x] ? 1 : 0;
                         V[x] = V[y] - V[x];
                         break;
                     }
                     case 0xE: { // [8xyE] SHL (multiply by two)
-                        if (GetfirstBit(V[x]) == 1) { V[15] = 1; }
-                        else                        { V[15] = 0; }
-
+                        //V[15] = V[y] >> 7;
+                        //V[x] = V[y] << 1;
+                        V[15] = (V[x] & 0x80U) >> 7U;
                         V[x] <<= 1;
                         break;
                     }
                     default:
                         std::cout << "Invalid Opcode\n"; exit(1);
                     }
-                PC += 2;
                 break;
             }
             
             case 9: {  // [9xy0] - SNE Vx, Vy
                 if (V[x] != V[y])
-                    PC += 4;
-                else
                     PC += 2;
                 break;
             }
 
             case 0xA: {  // [Annn] - Load I at address nnn
                 VI = nnn;
-                PC += 2;
                 break;
             }
 
@@ -252,55 +246,54 @@ struct Chip_8 {
                 break;
             }
 
+            // TODO: Improve randomness
             case 0xC: {  // [Cxkk] - Vx = rand & kk
-                V[x] = (int8_t)(rand() % 255) & kk;
-                PC += 2;
+                V[x] = randomSeed(randGen) & kk;
                 break;
             }
 
                     // TODO
             case 0xD: {  // [Dxyn] - DRW Vx, Vy, nibble
+                V[15] = 0;  // reset collision flag
                 ubyte nextSpriteLine = 0;
                 for (uint spriteRow = 0; spriteRow < n; ++spriteRow) {
                     // Get the n-byte sprite
-                    nextSpriteLine = mem[VI & 0xFFF + spriteRow];
+                    nextSpriteLine = mem[(VI & 0xFFF) + spriteRow];
                     // Go through each bit of the byte
                     for (uint bit = 0; bit < 8; ++bit) {
                         // spriterow + vertOffset is current row, horizontal offset is current col
-                        uint8_t horizontalOffset = bit + V[x];
-                        uint8_t verticalOffset = spriteRow + V[y];
-                        uint8_t drawBit = (nextSpriteLine >> (7 - bit)) & 0x1;
+                        uint8_t horizontalOffset = (bit + V[x]) % W;        // x-position
+                        uint8_t verticalOffset = (spriteRow + V[y]) % H;    // y-position
+                        uint8_t drawBit = (nextSpriteLine >> (7 - bit)) & 0x1u;
                         // Set the drawflag for collision
-                        if (pixels[W * ((spriteRow + verticalOffset) % H) + (horizontalOffset % W)] == 1) {
+                        if (pixels[W * verticalOffset + horizontalOffset] == 1) {
                             V[15] = 1;
                         }
                         // draw the drawBit
-                        pixels[W * ((spriteRow + verticalOffset) % H) + (horizontalOffset % W)] ^= drawBit;
+                        pixels[W * verticalOffset + horizontalOffset] ^= drawBit;
                     }
                 }
-                PC += 2;
                 break;
             }
 
             case 0xE: {  // [Ex9E] Skip if Vx is pressed
-                if (mem[PC + 1] == 0x9E) {
+                if (mem[PC + 1 - 2] == 0x9E) {
                     if (V[x] > 15) { std::cout << "Invalid code\n"; exit(1); }
                     if (keys[V[x]] == DOWN)
                         PC += 2;
                     
-                } else if (mem[PC + 1] == 0xA1) {
+                } else if (mem[PC + 1 - 2] == 0xA1) {
                     if (keys[V[x]] == UP)
                         PC += 2;
                 } else {
                     std::cout << "Invalid Opcode\n"; exit(1);
                     return;
                 }
-                PC += 2;
                 break;
             }
 
             case 0xF: {
-                switch (mem[PC+1]) {
+                switch (mem[PC+1 - 2]) {
                     /* Note: no need to advance PC in this switch case. PC is incremented at end of parent switch */
                     case 0x07: {  // [Fx07]
                         V[x] = delayTimer;
@@ -308,9 +301,18 @@ struct Chip_8 {
                     }
 
                     case 0x0A: {  // [Fx0A]
-                        // TODO : wait for key press
-                        uint8_t keypressed = 5;
-                        V[x] = keypressed;
+                        // TODO : wait for key press REDO
+                        bool keyPressed = false;
+                        for (uint i = 0; i < keys.size(); ++i) {
+                            if (keys[i] == DOWN) {
+                                V[x] = i;
+                                keyPressed = true;
+                                break;      // assuming this only breaks the loop not the switch case
+                            }
+                        }
+                        if (!keyPressed) {
+                            PC -= 2;  // repeat instruction
+                        }
                         break;
                     }
 
@@ -331,29 +333,29 @@ struct Chip_8 {
 
                     // TODO
                     case 0x29: {  // [Fx29]
-                        VI = V[x] * 5 + 2;
+                        VI = FONT_ADDRESS + V[x] * 5;
                         break;
                     }
 
                     case 0x33: {  // [Fx33]
                         uint16_t value = V[x];
-                        mem[VI + 2] = value % 100;  // ones digits
-                        value /= 10;  // get rid of ones digits
+                        mem[VI + 2] = value % 10;  // ones digits
+                        value /= 10;  // get rid of ones (tens prev) digits
                         mem[VI + 1] = value % 10;
-                        value /= 10;  // get rid of tens digits
-                        mem[VI] = (ubyte)value;
+                        value /= 10;  // get rid of ones (hundreds prev) digits
+                        mem[VI + 0] = value % 10;
                         break;
                     }
 
                     case 0x55: {  // [Fx55]
-                        for (uint_fast8_t i = 0; i <= x; ++i) {
+                        for (uint8_t i = 0; i <= x; ++i) {
                             mem[VI + i] = V[i];
                         }
                         break;
                     }
 
                     case 0x65: {  // [Fx65]
-                        for (uint_fast8_t i = 0; i <= x; ++i) {
+                        for (uint8_t i = 0; i <= x; ++i) {
                             V[i] = mem[VI + i];
                         }
                         break;
@@ -363,7 +365,6 @@ struct Chip_8 {
                         std::cout << "Invalid Opcode inside F case\n"; exit(1);
                         return;
                     }
-                PC += 2;
                 break;
             } // End of case 0xF 
 
@@ -373,15 +374,16 @@ struct Chip_8 {
             } 
         
         }   // End of switch case
-        std::cout << "Instruction is over\n";
+        std::cout << "Instruction at PC " << PC << " is over\n";
         return;
     }
 
     void RunCycle() {
-        uint maxInstructionsPerFrame = 50;
-        for (uint i = 0; i < maxInstructionsPerFrame; ++i) {
-            this->ExecuteInst();
-        }
+        this->ExecuteInst();
+        if (delayTimer > 0)
+            delayTimer--;
+        if (soundTimer > 0)
+            soundTimer--;
     }
 
     // Read the program to be executed from a file
@@ -408,15 +410,13 @@ void drawPixels(std::vector<int8_t> pixels) {
         for (uint col = 0; col < W; ++col) {
             // go through each pixel in the 64*32 array then scale by scaleFactor
             if (pixels[row * 64 + col] == 1) {
-                SDL_SetRenderDrawColor(gRenderer, 0, 0, 0, 255);
-                //SDL_RenderDrawLine(gRenderer, col * SCALEFACTOR, row * SCALEFACTOR, (row + 1) * SCALEFACTOR, col * SCALEFACTOR);
+                SDL_SetRenderDrawColor(gRenderer, 255, 255, 255, 255);
                 for (int i = 0; i < SCALEFACTOR; ++i) {
                     SDL_RenderDrawLine(gRenderer, col * SCALEFACTOR, row * SCALEFACTOR + i, (col + 1) * SCALEFACTOR, row * SCALEFACTOR + i);
                 }
             }
             else {
-                SDL_SetRenderDrawColor(gRenderer, 255, 255, 255, 255);
-                //SDL_RenderDrawLine(gRenderer, col * SCALEFACTOR, row * SCALEFACTOR, (col + 1) * SCALEFACTOR, row * SCALEFACTOR);
+                SDL_SetRenderDrawColor(gRenderer, 0, 0, 0, 255);
                 for (int i = 0; i < SCALEFACTOR; ++i) {
                     SDL_RenderDrawLine(gRenderer, col * SCALEFACTOR, row * SCALEFACTOR + i, (col + 1) * SCALEFACTOR, row * SCALEFACTOR + i);
                 }
@@ -447,6 +447,7 @@ keyDictionary KeybindsInitialize() {
 
 /* Main execution point */
 int main(int argc, char** argv) {
+    // Initialize Display
     SDL_Init(SDL_INIT_EVENTS) == 0 ? std::cout << "Success!\n" : std::cerr << "SDL FAILED" << std::endl;
     std::string title("Chip-8 Emulator");
     SDL_Window* window = SDL_CreateWindow(title.c_str(),
@@ -462,23 +463,17 @@ int main(int argc, char** argv) {
         SDL_DestroyWindow(window);
         exit(1);
     }
-    SDL_SetRenderDrawColor(gRenderer, 255, 255, 240, 0);
-    SDL_RenderClear(gRenderer);
     SDL_SetRenderDrawColor(gRenderer, 0, 0, 0, 0);
+    SDL_RenderClear(gRenderer);
 
     // Initialize the CPU
     keyDictionary keybinds = KeybindsInitialize();
-    std::vector<ubyte> testProgram{ 0xF2, 0x15 };
     Chip_8* CPU = new Chip_8(60, window);
-    CPU->LoadProgram("..\\Programs\\hanoi.bin");
-    
+    CPU->LoadProgram("..\\Programs\\MISSILE");
     
 
-    // while program is not over run cpu for one cycle
-    // executing max-instructions-per-frame number of ExecuteInsts
     SDL_Event e;
     bool quit = false;
-    // Main program loop
     while (!quit) {
         // process pending input
         while (SDL_PollEvent(&e)) {
@@ -489,40 +484,27 @@ int main(int argc, char** argv) {
             else if (e.type == SDL_KEYUP)
                 CPU->keys[keybinds[e.key.keysym.sym]] = UP;
         }
+
         // Run CPU
-        
         // Assuming CPU clock speed of 10 mhz (10,000,000 hertz frequency) and all operations take 2 cycles to complete
-        const int clockSpeed = 500; // Assume clock speed of 500 hertz (500 cycles per second, each instruction takes 2 cycles)
+        const int clockSpeed = 300; // Assume clock speed of 500 hertz (500 cycles per second, each instruction takes 2 cycles)
         int clockTimer = 0;
-        // Run clockSpeed / 2 instructions (500 cycles) 
         for (int i = 0; i < clockSpeed; i+=2) {
-            CPU->ExecuteInst();
+            CPU->RunCycle();    // manages PC and execution
         }
-        
-        //Render texture to screen
-        //SDL_RenderCopy(gRenderer, CPU->texture, NULL, NULL);
+
         //Update screen
         drawPixels(CPU->pixels);
         SDL_RenderPresent(gRenderer);
-        /* DEPRECATED
-        //SDL_BlitSurface(windowSurface, NULL, windowSurface, NULL);
-        //SDL_UpdateWindowSurface(window); */
     }
-    // poll events and pass them to the chip8 to let it know what is being pressed
 
     // program is over do cleanup
     WindowCleanup(window, CPU->texture);
     return 0;
 }
 
-
-class mainTester {
-public:
-    mainTester() { };
-
-    void runTests() {
-        //std::vector<ubyte> testProgram{ 0xF2, 0x15 };
-        //Chip_8* CPU = new Chip_8(60);
-    }
-
-};
+/*
+ * Some documentation on best cycle speed for specific games
+ * MISSILES -- 100
+ * 
+ * */
