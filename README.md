@@ -10,6 +10,9 @@ Chip-8 was a simple interpreted language that was fairly popular in the mid 1970
 ### Missile: ###
 ![Missile](Images/Missiles.png)
 
+# Dependencies
+Only dependency is the SDL library whose lib and include files I included in the dependencies folder. You might have to configure your compiler to make sure the library is properly linked.
+
 # Usage
 Simply go to the LoadProgram function call and change the file path to whatever ROM you would like to play. Can be in bin or ch8 format. Some games differ in their optimal clockspeed so you might have to tweak that manually
 
