@@ -140,11 +140,10 @@ void Chip_8::ExecuteInst() {
         case 4: {  // [8xy4] - ADD
             uint16_t result = V[x] + V[y];
             result > 255 ? V[15] = 1 : V[15] = 0;
-            V[x] = result & 0xFF;
+            V[x] = result & 0xFFu;
             break;
         }
         case 5: {  // [8xy5] - SUB
-            uint16_t result = V[x] - V[y];
             V[x] > V[y] ? V[15] = 1 : V[15] = 0;
             V[x] -= V[y];
             break;
@@ -416,7 +415,7 @@ int main(int argc, char** argv) {
     // Initialize the CPU
     keyDictionary keybinds = KeybindsInitialize();
     Chip_8* CPU = new Chip_8(60, window);
-    CPU->LoadProgram("..\\Programs\\INVADERS");
+    CPU->LoadProgram("..\\Programs\\MISSILE");
 
 
     SDL_Event e;
