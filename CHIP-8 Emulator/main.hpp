@@ -22,7 +22,6 @@
 #include <random>
 
  /** Memory starts at 0x200 (address 512) since 0 through 511 are reserved for CHIP-8 Interpreter */
-#define MEMSTART 0
 #define FONT_ADDRESS 2
 static constexpr const uint8_t SCALEFACTOR = 10u;
 static constexpr const uint8_t W = 64u, H = 32u;
@@ -34,6 +33,7 @@ typedef uint16_t instruction;
 typedef int8_t byte;
 typedef uint8_t ubyte;
 typedef unsigned int uint;
+// using keyDictionary = std::unordered_map<SDL_Keycode, int>; <- In implementation
 
 /** All instructions are 2 bytes long and are stored most-significant-byte first (big endian) */
 enum instructions {
@@ -69,15 +69,11 @@ struct Chip_8 {
     Chip_8(uint _FPS, SDL_Window* window);
     void ExecuteInst();
     void RunCycle();
-    // Read the program to be executed from a file
     void LoadProgram(const char* filename, uint pos = 0x200);
-
-    
-    
 };
 
 /*
  * Some documentation on best cycle speed for specific games
- * MISSILES -- 100
- *
+ * MISSILES --  100
+ * INVADERS -- ~200
  * */

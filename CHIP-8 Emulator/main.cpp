@@ -57,7 +57,7 @@ void Chip_8::ExecuteInst() {
     uint16_t nnn = opcode & 0xFFFu;
     uint8_t n = opcode & 0xFu;
     uint8_t x = mem[PC] & 0xFu;           // lower half of first byte   (nibble 2)
-    uint8_t y = mem[PC + 1] >> 4 & 0xFu;  // upper half of second byte  (nibble 3)
+    uint8_t y = (mem[PC + 1] >> 4) & 0xFu;  // upper half of second byte  (nibble 3)
     int8_t kk = mem[PC + 1];
     ubyte u = (mem[PC] >> 4) & 0xFu;      // first nibble
     ubyte v = (mem[PC + 1]) & 0xFu;      // last nibble
@@ -139,19 +139,19 @@ void Chip_8::ExecuteInst() {
         }
         case 4: {  // [8xy4] - ADD
             uint16_t result = V[x] + V[y];
-            result > 255 ? V[15] = 1 : V[15] = 0;
+            V[15] = result > 255 ? 1 : 0;
             V[x] = result & 0xFFu;
             break;
         }
         case 5: {  // [8xy5] - SUB
-            V[x] > V[y] ? V[15] = 1 : V[15] = 0;
+            V[15] = V[x] > V[y] ? 1 : 0;
             V[x] -= V[y];
             break;
         }
         case 6: {  // [8xy6] - SHR - Raises flag if num is odd
-            //V[15] = V[y] & 0x1;     // least significant bit
+            //V[15] = V[y] & 0x1u;     // least significant bit
             //V[x] = V[y] >> 1;           // Divide by 2
-            V[15] = V[x] & 0x1U;
+            V[15] = V[x] & 0x1u;
             V[x] >>= 1;
             break;
         }
@@ -163,7 +163,7 @@ void Chip_8::ExecuteInst() {
         case 0xE: { // [8xyE] SHL (multiply by two)
             //V[15] = V[y] >> 7;
             //V[x] = V[y] << 1;
-            V[15] = (V[x] & 0x80U) >> 7U;
+            V[15] = (V[x] & 0x80U) >> 7u;
             V[x] <<= 1;
             break;
         }
@@ -189,13 +189,11 @@ void Chip_8::ExecuteInst() {
         break;
     }
 
-            // TODO: Improve randomness
     case 0xC: {  // [Cxkk] - Vx = rand & kk
         V[x] = randomSeed(randGen) & kk;
         break;
     }
 
-            // TODO
     case 0xD: {  // [Dxyn] - DRW Vx, Vy, nibble
         V[15] = 0;  // reset collision flag
         ubyte nextSpriteLine = 0;
@@ -246,15 +244,15 @@ void Chip_8::ExecuteInst() {
         }
 
         case 0x0A: {  // [Fx0A]
-            // TODO : wait for key press REDO
             bool keyPressed = false;
-            for (uint i = 0; i < keys.size(); ++i) {
+            for (uint i = 0; i < keys.size() && !keyPressed; ++i) {
                 if (keys[i] == DOWN) {
                     V[x] = i;
                     keyPressed = true;
                     break;      // assuming this only breaks the loop not the switch case
                 }
             }
+
             if (!keyPressed) {
                 PC -= 2;  // repeat instruction
             }
@@ -393,6 +391,7 @@ keyDictionary KeybindsInitialize() {
 
 /* Main execution point */
 int main(int argc, char** argv) {
+
     // Initialize Display
     SDL_Init(SDL_INIT_EVENTS) == 0 ? std::cout << "Success!\n" : std::cerr << "SDL FAILED" << std::endl;
     std::string title("Chip-8 Emulator");
@@ -415,7 +414,7 @@ int main(int argc, char** argv) {
     // Initialize the CPU
     keyDictionary keybinds = KeybindsInitialize();
     Chip_8* CPU = new Chip_8(60, window);
-    CPU->LoadProgram("..\\Programs\\MISSILE");
+    CPU->LoadProgram("..\\Programs\\chipquarium.ch8");
 
 
     SDL_Event e;
@@ -431,9 +430,8 @@ int main(int argc, char** argv) {
                 CPU->keys[keybinds[e.key.keysym.sym]] = UP;
         }
 
-        // Run CPU
-        // Assuming CPU clock speed of 10 mhz (10,000,000 hertz frequency) and all operations take 2 cycles to complete
-        const int clockSpeed = 100; // Assume clock speed of 500 hertz (500 cycles per second, each instruction takes 2 cycles)
+        // Run CPU Assuming all operations take 2 cycles to complete
+        const int clockSpeed = 175; // Assume clock speed of 500 hertz (500 cycles per second, each instruction takes 2 cycles)
         int clockTimer = 0;
         for (int i = 0; i < clockSpeed; i += 2) {
             CPU->RunCycle();    // manages PC and execution
